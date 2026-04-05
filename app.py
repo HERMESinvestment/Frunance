@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import sqlite3
 import pdfplumber
 from datetime import date, timedelta
 import random
@@ -49,7 +48,15 @@ h1,h2,h3,h4 { font-weight:700 !important; letter-spacing:0.04em !important; }
 """, unsafe_allow_html=True)
 
 
-DB_PATH = "mercado_datos.db"
+# ── Conexión Supabase ─────────────────────
+import os
+from supabase import create_client, Client
+
+@st.cache_resource
+def get_supabase() -> Client:
+    url  = st.secrets["SUPABASE_URL"]
+    key  = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
 MERCADOS = {
     "excel":       "Bogotá (Corabastos)",
@@ -67,77 +74,77 @@ PRODUCTOS_DESTACADOS = [
 ]
 UNIDADES = {"bulto":50,"canasta":25,"kg":1,"kilogramo":1,"unidad":1}
 
-# ── DB ────────────────────────────────────
+# ── DB (Supabase) ─────────────────────────
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""CREATE TABLE IF NOT EXISTS precios (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        fecha TEXT NOT NULL, producto TEXT NOT NULL,
-        precio_min REAL, precio_max REAL, precio_prom REAL,
-        volumen REAL, fuente TEXT, unidad TEXT,
-        UNIQUE(fecha,producto,fuente))""")
-    # Agregar columna unidad si no existe (compatibilidad con DB anteriores)
-    try: conn.execute("ALTER TABLE precios ADD COLUMN unidad TEXT")
-    except: pass
-    conn.execute("""CREATE TABLE IF NOT EXISTS compras (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        fecha TEXT NOT NULL, producto TEXT NOT NULL,
-        cantidad_kg REAL, precio_unit REAL, total REAL,
-        mercado TEXT, unidad_orig TEXT)""")
-    conn.commit(); conn.close()
+    pass  # Las tablas ya existen en Supabase
 
 def guardar_registros(records, fuente, fecha):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor(); ins = 0
+    sb = get_supabase(); ins = 0
     for r in records:
         try:
-            c.execute("""INSERT OR IGNORE INTO precios
-                (fecha,producto,precio_min,precio_max,precio_prom,volumen,fuente,unidad)
-                VALUES(?,?,?,?,?,?,?,?)""",
-                (fecha,r['producto'],r.get('precio_min'),r.get('precio_max'),
-                 r.get('precio_prom'),r.get('volumen'),fuente,r.get('unidad','')))
-            ins += c.rowcount
+            sb.table("precios").upsert({
+                "fecha": fecha,
+                "producto": r["producto"],
+                "precio_min": r.get("precio_min"),
+                "precio_max": r.get("precio_max"),
+                "precio_prom": r.get("precio_prom"),
+                "volumen": r.get("volumen"),
+                "fuente": fuente,
+                "unidad": r.get("unidad", "")
+            }, on_conflict="fecha,producto,fuente").execute()
+            ins += 1
         except: pass
-    conn.commit(); conn.close(); return ins
+    return ins
 
 def cargar_datos():
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql("SELECT * FROM precios ORDER BY fecha,producto", conn)
-    conn.close()
+    sb = get_supabase()
+    try:
+        res = sb.table("precios").select("*").order("fecha").order("producto").execute()
+        df = pd.DataFrame(res.data)
+    except:
+        df = pd.DataFrame()
     if not df.empty:
-        df['fecha'] = pd.to_datetime(df['fecha'])
-        df['mercado'] = df['fuente'].map(lambda f: MERCADOS.get(f,f))
+        df["fecha"] = pd.to_datetime(df["fecha"])
+        df["mercado"] = df["fuente"].map(lambda f: MERCADOS.get(f, f))
     return df
 
 def eliminar_datos(fecha_str, fuente):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("DELETE FROM precios WHERE fecha=? AND fuente=?",(fecha_str,fuente))
-    conn.commit(); conn.close()
+    sb = get_supabase()
+    sb.table("precios").delete().eq("fecha", fecha_str).eq("fuente", fuente).execute()
 
 def cargar_compras():
-    conn = sqlite3.connect(DB_PATH)
-    try: df = pd.read_sql("SELECT * FROM compras ORDER BY id DESC",conn)
-    except: df = pd.DataFrame()
-    conn.close(); return df
+    sb = get_supabase()
+    try:
+        res = sb.table("compras").select("*").order("id", desc=True).execute()
+        return pd.DataFrame(res.data)
+    except:
+        return pd.DataFrame()
 
-def guardar_compra(fecha,producto,cantidad_kg,precio_unit,mercado,unidad_orig):
-    total = cantidad_kg*precio_unit
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""INSERT INTO compras
-        (fecha,producto,cantidad_kg,precio_unit,total,mercado,unidad_orig)
-        VALUES(?,?,?,?,?,?,?)""",
-        (str(fecha),producto,cantidad_kg,precio_unit,total,mercado,unidad_orig))
-    conn.commit(); conn.close(); return total
+def guardar_compra(fecha, producto, cantidad_kg, precio_unit, mercado, unidad_orig):
+    total = cantidad_kg * precio_unit
+    sb = get_supabase()
+    sb.table("compras").insert({
+        "fecha": str(fecha),
+        "producto": producto,
+        "cantidad_kg": cantidad_kg,
+        "precio_unit": precio_unit,
+        "total": total,
+        "mercado": mercado,
+        "unidad_orig": unidad_orig
+    }).execute()
+    return total
 
 def eliminar_compra(cid):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("DELETE FROM compras WHERE id=?",(cid,))
-    conn.commit(); conn.close()
+    sb = get_supabase()
+    sb.table("compras").delete().eq("id", cid).execute()
 
 def historico_ya_existe():
-    conn = sqlite3.connect(DB_PATH)
-    n = conn.execute("SELECT COUNT(*) FROM precios WHERE fuente='historico'").fetchone()[0]
-    conn.close(); return n > 0
+    sb = get_supabase()
+    try:
+        res = sb.table("precios").select("id").eq("fuente", "historico").limit(1).execute()
+        return len(res.data) > 0
+    except:
+        return False
 
 def generar_historico():
     PRODS_E = [
