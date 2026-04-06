@@ -48,15 +48,19 @@ h1,h2,h3,h4 { font-weight:700 !important; letter-spacing:0.04em !important; }
 """, unsafe_allow_html=True)
 
 
-# ── Conexión Supabase ─────────────────────
-import os
-from supabase import create_client, Client
+# ── Conexión Supabase via REST API ────────
+import requests as _requests
 
-@st.cache_resource
-def get_supabase() -> Client:
-    url  = st.secrets["SUPABASE_URL"]
-    key  = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+def _sb_headers():
+    return {
+        "apikey": st.secrets["SUPABASE_KEY"],
+        "Authorization": f"Bearer {st.secrets['SUPABASE_KEY']}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
+
+def _sb_url(tabla):
+    return f"{st.secrets['SUPABASE_URL']}/rest/v1/{tabla}"
 
 MERCADOS = {
     "excel":       "Bogotá (Corabastos)",
@@ -74,75 +78,76 @@ PRODUCTOS_DESTACADOS = [
 ]
 UNIDADES = {"bulto":50,"canasta":25,"kg":1,"kilogramo":1,"unidad":1}
 
-# ── DB (Supabase) ─────────────────────────
+# ── DB (Supabase REST) ────────────────────
 def init_db():
     pass  # Las tablas ya existen en Supabase
 
 def guardar_registros(records, fuente, fecha):
-    sb = get_supabase(); ins = 0
+    ins = 0
     for r in records:
         try:
-            sb.table("precios").upsert({
-                "fecha": fecha,
-                "producto": r["producto"],
+            data = {
+                "fecha": fecha, "producto": r["producto"],
                 "precio_min": r.get("precio_min"),
                 "precio_max": r.get("precio_max"),
                 "precio_prom": r.get("precio_prom"),
                 "volumen": r.get("volumen"),
-                "fuente": fuente,
-                "unidad": r.get("unidad", "")
-            }, on_conflict="fecha,producto,fuente").execute()
-            ins += 1
+                "fuente": fuente, "unidad": r.get("unidad","")
+            }
+            h = _sb_headers()
+            h["Prefer"] = "resolution=ignore-duplicates,return=representation"
+            resp = _requests.post(_sb_url("precios"), json=data, headers=h)
+            if resp.status_code in (200,201): ins += 1
         except: pass
     return ins
 
 def cargar_datos():
-    sb = get_supabase()
     try:
-        res = sb.table("precios").select("*").order("fecha").order("producto").execute()
-        df = pd.DataFrame(res.data)
+        h = _sb_headers()
+        h["Prefer"] = "count=none"
+        resp = _requests.get(
+            _sb_url("precios") + "?order=fecha,producto&limit=50000",
+            headers=h)
+        df = pd.DataFrame(resp.json() if resp.ok else [])
     except:
         df = pd.DataFrame()
     if not df.empty:
         df["fecha"] = pd.to_datetime(df["fecha"])
-        df["mercado"] = df["fuente"].map(lambda f: MERCADOS.get(f, f))
+        df["mercado"] = df["fuente"].map(lambda f: MERCADOS.get(f,f))
     return df
 
 def eliminar_datos(fecha_str, fuente):
-    sb = get_supabase()
-    sb.table("precios").delete().eq("fecha", fecha_str).eq("fuente", fuente).execute()
+    _requests.delete(
+        _sb_url("precios") + f"?fecha=eq.{fecha_str}&fuente=eq.{fuente}",
+        headers=_sb_headers())
 
 def cargar_compras():
-    sb = get_supabase()
     try:
-        res = sb.table("compras").select("*").order("id", desc=True).execute()
-        return pd.DataFrame(res.data)
+        resp = _requests.get(
+            _sb_url("compras") + "?order=id.desc&limit=1000",
+            headers=_sb_headers())
+        return pd.DataFrame(resp.json() if resp.ok else [])
     except:
         return pd.DataFrame()
 
 def guardar_compra(fecha, producto, cantidad_kg, precio_unit, mercado, unidad_orig):
     total = cantidad_kg * precio_unit
-    sb = get_supabase()
-    sb.table("compras").insert({
-        "fecha": str(fecha),
-        "producto": producto,
-        "cantidad_kg": cantidad_kg,
-        "precio_unit": precio_unit,
-        "total": total,
-        "mercado": mercado,
-        "unidad_orig": unidad_orig
-    }).execute()
+    _requests.post(_sb_url("compras"), headers=_sb_headers(), json={
+        "fecha": str(fecha), "producto": producto,
+        "cantidad_kg": cantidad_kg, "precio_unit": precio_unit,
+        "total": total, "mercado": mercado, "unidad_orig": unidad_orig
+    })
     return total
 
 def eliminar_compra(cid):
-    sb = get_supabase()
-    sb.table("compras").delete().eq("id", cid).execute()
+    _requests.delete(_sb_url("compras") + f"?id=eq.{cid}", headers=_sb_headers())
 
 def historico_ya_existe():
-    sb = get_supabase()
     try:
-        res = sb.table("precios").select("id").eq("fuente", "historico").limit(1).execute()
-        return len(res.data) > 0
+        resp = _requests.get(
+            _sb_url("precios") + "?fuente=eq.historico&limit=1",
+            headers=_sb_headers())
+        return len(resp.json()) > 0
     except:
         return False
 
