@@ -188,22 +188,35 @@ def generar_historico():
             s.append(round(p,0))
         return s
 
-    conn=sqlite3.connect(DB_PATH); c=conn.cursor(); ti=0
-    random.seed(42)
+    random.seed(42); ti=0
+    h = _sb_headers()
+    h["Prefer"] = "resolution=ignore-duplicates,return=representation"
     for grp,fuente in [(PRODS_E,"historico"),(PRODS_P,"historico")]:
         for nm,base,vol,pico in grp:
             ps=rw(base,vol,pico,dias)
+            # Agrupar en lotes de 100 para no saturar la API
+            lote = []
             for i,d in enumerate(dias):
                 p=ps[i]; sp=random.uniform(0.06,0.14)
+                lote.append({
+                    "fecha": str(d), "producto": nm,
+                    "precio_min": round(p*(1-sp/2),0),
+                    "precio_max": round(p*(1+sp/2),0),
+                    "precio_prom": p,
+                    "volumen": round(random.uniform(50,800),1),
+                    "fuente": fuente, "unidad": "kg"
+                })
+                if len(lote) >= 100:
+                    try:
+                        resp = _requests.post(_sb_url("precios"), json=lote, headers=h)
+                        if resp.ok: ti += len(lote)
+                    except: pass
+                    lote = []
+            if lote:
                 try:
-                    c.execute("""INSERT OR IGNORE INTO precios
-                        (fecha,producto,precio_min,precio_max,precio_prom,volumen,fuente,unidad)
-                        VALUES(?,?,?,?,?,?,?,?)""",
-                        (str(d),nm,round(p*(1-sp/2),0),round(p*(1+sp/2),0),p,
-                         round(random.uniform(50,800),1),fuente,"kg"))
-                    ti+=c.rowcount
+                    resp = _requests.post(_sb_url("precios"), json=lote, headers=h)
+                    if resp.ok: ti += len(lote)
                 except: pass
-    conn.commit(); conn.close()
     return ti,len(dias),len(PRODS_E)+len(PRODS_P)
 
 # ── PARSERS ───────────────────────────────
