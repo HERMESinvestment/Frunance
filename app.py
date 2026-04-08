@@ -117,9 +117,16 @@ def cargar_datos():
     return df
 
 def eliminar_datos(fecha_str, fuente):
-    _requests.delete(
-        _sb_url("precios") + f"?fecha=eq.{fecha_str}&fuente=eq.{fuente}",
-        headers=_sb_headers())
+    import requests as _req
+    if fecha_str == "historico":
+        # Borrar todo el histórico demo
+        _req.delete(
+            _sb_url("precios") + f"?fuente=eq.{fuente}",
+            headers=_sb_headers())
+    else:
+        _req.delete(
+            _sb_url("precios") + f"?fecha=eq.{fecha_str}&fuente=eq.{fuente}",
+            headers=_sb_headers())
 
 def cargar_compras():
     try:
@@ -451,7 +458,7 @@ with st.sidebar:
     if historico_ya_existe():
         st.success("✔ Demo cargado")
         if st.button("🗑️ Borrar demo",use_container_width=True):
-            _requests.delete(_sb_url("precios")+"?fuente=eq.historico", headers=_sb_headers())
+            eliminar_datos("historico", "historico")
             df_all=cargar_datos(); st.rerun()
     else:
         if st.button("⚡ Cargar demo",use_container_width=True,type="primary"):
