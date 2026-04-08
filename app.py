@@ -451,9 +451,8 @@ with st.sidebar:
     if historico_ya_existe():
         st.success("✔ Demo cargado")
         if st.button("🗑️ Borrar demo",use_container_width=True):
-            conn=sqlite3.connect(DB_PATH)
-            conn.execute("DELETE FROM precios WHERE fuente='historico'")
-            conn.commit(); conn.close(); df_all=cargar_datos(); st.rerun()
+            _requests.delete(_sb_url("precios")+"?fuente=eq.historico", headers=_sb_headers())
+            df_all=cargar_datos(); st.rerun()
     else:
         if st.button("⚡ Cargar demo",use_container_width=True,type="primary"):
             with st.spinner("Generando..."): n,d,p=generar_historico()
