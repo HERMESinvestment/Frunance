@@ -49,18 +49,26 @@ h1,h2,h3,h4 { font-weight:700 !important; letter-spacing:0.04em !important; }
 
 
 # ── Conexión Supabase via REST API ────────
-import requests as _requests
+import requests as _req
 
-def _sb_headers():
+def _sb_headers(prefer="return=representation"):
+    try:
+        key = st.secrets["SUPABASE_KEY"]
+    except Exception:
+        key = ""
     return {
-        "apikey": st.secrets["SUPABASE_KEY"],
-        "Authorization": f"Bearer {st.secrets['SUPABASE_KEY']}",
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
-        "Prefer": "return=representation"
+        "Prefer": prefer
     }
 
 def _sb_url(tabla):
-    return f"{st.secrets['SUPABASE_URL']}/rest/v1/{tabla}"
+    try:
+        url = st.secrets["SUPABASE_URL"]
+    except Exception:
+        url = ""
+    return f"{url}/rest/v1/{tabla}"
 
 MERCADOS = {
     "excel":       "Bogotá (Corabastos)",
@@ -96,7 +104,7 @@ def guardar_registros(records, fuente, fecha):
             }
             h = _sb_headers()
             h["Prefer"] = "resolution=ignore-duplicates,return=representation"
-            resp = _requests.post(_sb_url("precios"), json=data, headers=h)
+            resp = _req.post(_sb_url("precios"), json=data, headers=h)
             if resp.status_code in (200,201): ins += 1
         except: pass
     return ins
@@ -105,7 +113,7 @@ def cargar_datos():
     try:
         h = _sb_headers()
         h["Prefer"] = "count=none"
-        resp = _requests.get(
+        resp = _req.get(
             _sb_url("precios") + "?order=fecha,producto&limit=50000",
             headers=h)
         df = pd.DataFrame(resp.json() if resp.ok else [])
@@ -117,20 +125,16 @@ def cargar_datos():
     return df
 
 def eliminar_datos(fecha_str, fuente):
-    import requests as _req
     if fecha_str == "historico":
-        # Borrar todo el histórico demo
-        _req.delete(
-            _sb_url("precios") + f"?fuente=eq.{fuente}",
+        _req.delete(_sb_url("precios") + f"?fuente=eq.{fuente}",
             headers=_sb_headers())
     else:
-        _req.delete(
-            _sb_url("precios") + f"?fecha=eq.{fecha_str}&fuente=eq.{fuente}",
+        _req.delete(_sb_url("precios") + f"?fecha=eq.{fecha_str}&fuente=eq.{fuente}",
             headers=_sb_headers())
 
 def cargar_compras():
     try:
-        resp = _requests.get(
+        resp = _req.get(
             _sb_url("compras") + "?order=id.desc&limit=1000",
             headers=_sb_headers())
         return pd.DataFrame(resp.json() if resp.ok else [])
@@ -139,7 +143,7 @@ def cargar_compras():
 
 def guardar_compra(fecha, producto, cantidad_kg, precio_unit, mercado, unidad_orig):
     total = cantidad_kg * precio_unit
-    _requests.post(_sb_url("compras"), headers=_sb_headers(), json={
+    _req.post(_sb_url("compras"), headers=_sb_headers(), json={
         "fecha": str(fecha), "producto": producto,
         "cantidad_kg": cantidad_kg, "precio_unit": precio_unit,
         "total": total, "mercado": mercado, "unidad_orig": unidad_orig
@@ -147,11 +151,11 @@ def guardar_compra(fecha, producto, cantidad_kg, precio_unit, mercado, unidad_or
     return total
 
 def eliminar_compra(cid):
-    _requests.delete(_sb_url("compras") + f"?id=eq.{cid}", headers=_sb_headers())
+    _req.delete(_sb_url("compras") + f"?id=eq.{cid}", headers=_sb_headers())
 
 def historico_ya_existe():
     try:
-        resp = _requests.get(
+        resp = _req.get(
             _sb_url("precios") + "?fuente=eq.historico&limit=1",
             headers=_sb_headers())
         return len(resp.json()) > 0
@@ -215,13 +219,13 @@ def generar_historico():
                 })
                 if len(lote) >= 100:
                     try:
-                        resp = _requests.post(_sb_url("precios"), json=lote, headers=h)
+                        resp = _req.post(_sb_url("precios"), json=lote, headers=h)
                         if resp.ok: ti += len(lote)
                     except: pass
                     lote = []
             if lote:
                 try:
-                    resp = _requests.post(_sb_url("precios"), json=lote, headers=h)
+                    resp = _req.post(_sb_url("precios"), json=lote, headers=h)
                     if resp.ok: ti += len(lote)
                 except: pass
     return ti,len(dias),len(PRODS_E)+len(PRODS_P)
